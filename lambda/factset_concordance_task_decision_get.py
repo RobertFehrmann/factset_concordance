@@ -74,7 +74,8 @@ def lambda_handler(event, context):
     
     # The return value will contain an array of arrays (one inner array per input row).
     array_of_rows_to_return = [ ]
-    
+
+    # map input values with column names    
     col_names=['name','country','state','url','taskId','rowIndex']
 
     try:
@@ -91,7 +92,7 @@ def lambda_handler(event, context):
         row_count=len(rows)
         if (len(rows) > MAX_BATCH_ROWS):
             status_code = 400;
-            json_compatible_string_to_return=json.dumps({"data" : ["Too many rows in batch; Set MAX_BATCH_ROWS="+str(MAX_BATCH_ROWS) ] })
+            json_compatible_string_to_return="Too many rows in batch; Set MAX_BATCH_ROWS="+str(MAX_BATCH_ROWS) 
         else:
         
             # Get Credentials from Secret Manager
@@ -102,96 +103,103 @@ def lambda_handler(event, context):
             ssm_response_time_ms=int(((ssm_end_ts-ssm_begin_ts)*1000)/row_count)
             
             # initialize request  object
+            headers={'Content-type': 'application/json;charaset=UTF-8', 'Accept': 'application/json'}
+            url='https://api.factset.com/content/factset-concordance/v1/company-decisions'
+            
             session=requests.Session()
-            session.headers.update={'Content-type': 'application/json', 'Accept': 'application/json'}
             session.auth=(secret['APIUser'],secret['APIKey'])
             timeout=(FACTSET_API_READ_TIMEOUT)
     
-            url='https://api.factset.com/content/factset-concordance/v1/company-decisions'
-     
             # For each input row in the JSON object...
-            batch={}
-            batch['rows']=[]
             task_set=set()
             debug=0
             for row in rows:
+                # find unique taskIds
                 task_set.add(row[5])
                 
+                # prepare output object
+                row_number=row[0]
+                output_row = {}
+                
+                # map input values to output 
+                for i in range(1,len(row)):
+                    if not (row[i] == None):
+                        output_row[col_names[i-1]]=row[i]
+    
+                array_of_rows_to_return.append([row_number,[output_row]])
+                
+            # initialize a results dictionary since we first request updates
+            # for all task and then map the results to output rows
             result_dict={}
+            
             params={}
             params['offset']=0
             params['limit']=MAX_BATCH_ROWS
 
-            for taskId in task_set:
-                try:
-                    params['taskId']=taskId
-                    result_dict[taskId]={}
-                    api_begin_ts=time.time()
-                    response=session.get(url,params=params,timeout=timeout)
-                    api_end_ts=time.time()
-                
-                    # Compose the output based on the input. This simple example
-                    # merely echoes the input by collecting the values into an array that
-                    # will be treated as a single VARIANT value.
-                    response.raise_for_status()
+            try:
+                api_response_time_ms=0
 
-                    result_dict[taskId]['status_code'] = response.status_code
-                
+                for taskId in task_set:
                     try:
-                        result_dict[taskId]['response'] = response.json()
-
-                    except Exception as err:
-                        pass
-
-                except Timeout as err:
-                    result_dict[taskId]['status_code'] = 408
-                    result_dict[taskId]['response'] = str(err)
-                    api_end_ts=time.time()
-                    
-                except Exception as err:
-                    result_dict[taskId]['status_code'] = 400
-                    result_dict[taskId]['response'] = str(err)
-                    api_end_ts=time.time()
-
-                end_ts=time.time()
-                api_response_time_ms=int((api_end_ts-api_begin_ts)*1000)
-                billing_response_time_ms = api_response_time_ms+ssm_response_time_ms
-                result_dict[taskId]['debug']={}
-                result_dict[taskId]['debug']['api_response_time_ms']=api_response_time_ms
-                result_dict[taskId]['debug']['billing_response_time_ms']=billing_response_time_ms
-
-            for row in rows:
-                # Read the input row number (the output row number will be the same).
-                row_number = row[0]
-                output_row={}
-                
-                for i in range(1,len(row)):
-                    if not (row[i] == None):
-                        value=row[i]
-                        output_row[col_names[i-1]]=value
-      
-                if result_dict[output_row['taskId']]['status_code']==200:
-                    response=result_dict[output_row['taskId']]['response']
-                    if  int(output_row['rowIndex']) < len(response['data']) :
-                        output_row['response']=response['data'][int(output_row['rowIndex'])]
-                        output_row['mapStatus']=output_row['response']['mapStatus']
-                        if output_row['mapStatus']=='MAPPED':
-                            output_row['entityId']=output_row['response']['entityId']
-                    else:
-                        output_row['len_data']=len(response['data'])
+                        params['taskId']=taskId
                         
+                        # initialize results dictionary for selected task
+                        
+                        result_dict[taskId]={}
+                        api_begin_ts=time.time()
+                        response=session.get(url,params=params, headers=headers, timeout=timeout)
+                        api_end_ts=time.time()
+                    
+                        response.raise_for_status()
+                        
+                        end_ts=time.time()
+                        task_api_response_time_ms=int((api_end_ts-api_begin_ts)*1000)
+                        api_response_time_ms+=task_api_response_time_ms
+                        
+                        # store api results for the task in the results dictionary
+                        result_dict[taskId]['task_api_response_time_ms']=task_api_response_time_ms
+                        result_dict[taskId]['status_code'] = response.status_code
+                        result_dict[taskId]['response'] = (response.json())['data']
+                        
+                    except Timeout as err:
+                        raise
+                        
+                    except Exception as err:
+                        result_dict[taskId]['status_code'] = response.status_code
+                        result_dict[taskId]['response'] = response.text
+                        
+                billing_response_time_ms = api_response_time_ms+ssm_response_time_ms
 
-                output_value = [output_row]
-                
-                # Put the returned row number and the returned value into an array.
-                
-                row_to_return = [row_number, output_value]
-     
-                # ... and add that array to the main array.
-                array_of_rows_to_return.append(row_to_return)
-                
-            json_compatible_string_to_return = json.dumps({"data" : array_of_rows_to_return})
+                # collect debug information. By default the results_dict is NOT returned
+                # since it could exceed the 6 mb lambda output constraint
+                array_of_rows_to_return[0][1][0]['debug']={}
+                array_of_rows_to_return[0][1][0]['debug']['api_response_time_ms']=api_response_time_ms
+                array_of_rows_to_return[0][1][0]['debug']['billing_response_time_ms']=billing_response_time_ms
+                #array_of_rows_to_return[0][1][0]['debug']['results']=result_dict
 
+                # for all output row
+                for row in array_of_rows_to_return:
+                    
+                    output_row=row[1][0]
+                    
+                    # if the response for the task of the output row is 200
+                    # then find the response object based on input parameter rowIndex 
+                    # and store it with the output row
+                    if result_dict[output_row['taskId']]['status_code']==200:
+                        response=result_dict[output_row['taskId']]['response']
+                        if  int(output_row['rowIndex']) < len(response) :
+                            output_row['response']=[response[int(output_row['rowIndex'])]]
+                        else:
+                            output_row['response']=['API Row Index not found']                            
+                    else:
+                        output_row['response']=[result_dict[output_row['taskId']]['response']]
+
+                json_compatible_string_to_return = json.dumps({"data" : array_of_rows_to_return})
+
+            except Timeout as err:
+                status_code=408
+                json_compatible_string_to_return="HTTP Timeout: "+ url + " exceeded "+str(timeout)+" seconds"
+            
     except Exception as err:
         # 400 implies some type of error.
         status_code = 400

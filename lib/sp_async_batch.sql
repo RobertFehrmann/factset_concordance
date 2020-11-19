@@ -198,12 +198,12 @@ function concordance_configure() {
     snowflake.execute({sqlText: sqlquery});
 
     sqlquery=`
-        CREATE STREAM `+CONCORDANCE_TABLE_STREAM+` ON TABLE `+CONCORDANCE_TABLE+`
+        CREATE OR REPLACE STREAM `+CONCORDANCE_TABLE_STREAM+` ON TABLE `+CONCORDANCE_TABLE+`
     `;
     snowflake.execute({sqlText: sqlquery});
 
     sqlquery=`
-        CREATE TABLE `+CONCORDANCE_INTERFACE_TABLE+` (
+        CREATE OR REPLACE TABLE `+CONCORDANCE_INTERFACE_TABLE+` (
             id integer identity (0,1)
             ,request_type varchar not null
             ,name varchar 
@@ -221,12 +221,12 @@ function concordance_configure() {
     snowflake.execute({sqlText: sqlquery});
 
     sqlquery=`
-        CREATE STREAM `+CONCORDANCE_INTERFACE_TABLE_STREAM+` ON TABLE `+CONCORDANCE_INTERFACE_TABLE+`
+        CREATE OR REPLACE STREAM `+CONCORDANCE_INTERFACE_TABLE_STREAM+` ON TABLE `+CONCORDANCE_INTERFACE_TABLE+`
     `;
     snowflake.execute({sqlText: sqlquery});
 
     sqlquery=`
-        create or replace view `+CONCORDANCE_INTERFACE_TABLE_STATUS+` AS
+        CREATE OR REPLACE VIEW `+CONCORDANCE_INTERFACE_TABLE_STATUS+` AS
             WITH tasks AS (
                 SELECT *
                 FROM `+CONCORDANCE_INTERFACE_TABLE+` 
@@ -320,11 +320,11 @@ function concordance_task_get(external_function) {
                 ,concordance:"url"::varchar requested_url
                 ,concordance:"taskId"::varchar task_id
                 ,concordance:"rowIndex"::int task_index
-                ,case when (concordance:"mapStatus"::varchar) is null then '`+STATUS_PENDING+`'
-                        when (concordance:"mapStatus"::varchar)='`+STATUS_MAPPED+`' then '`+STATUS_COMPLETED+`' 
+                ,case when (concordance:"response"[0]."mapStatus"::varchar) is null then '`+STATUS_PENDING+`'
+                        when (concordance:"response"[0]."mapStatus"::varchar)='`+STATUS_MAPPED+`' then '`+STATUS_COMPLETED+`' 
                         else '`+STATUS_REVIEW+`' end  status
-                ,concordance:"mapStatus"::varchar map_status
-                ,concordance:"entityId"::varchar entity_id     
+                ,concordance:"response"[0]."mapStatus"::varchar map_status
+                ,concordance:"response"[0]."entityId"::varchar entity_id     
                 ,concordance
             FROM (  
                 SELECT `+FULLY_QUALIFIED_PATH+`(name, country, state,website,task_id,task_index)[0] concordance

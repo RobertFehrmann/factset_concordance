@@ -1,13 +1,11 @@
 import json
 import time
-import re
 
 import boto3
 import base64
 
 import requests
 from requests.exceptions import Timeout
-
 
 def get_secret():
 
@@ -62,7 +60,7 @@ def get_secret():
 
 def lambda_handler(event, context):
  
-    MAX_BATCH_ROWS=1
+    MAX_BATCH_ROWS=25
     FACTSET_API_READ_TIMEOUT=25
 
     begin_ts=time.time()
@@ -73,7 +71,7 @@ def lambda_handler(event, context):
     # The return value will contain an array of arrays (one inner array per input row).
     array_of_rows_to_return = [ ]
     
-    col_names=['ids']
+    col_names=['name','country','state','url']
  
     try:
         # From the input parameter named "event", get the body, which contains
@@ -89,7 +87,7 @@ def lambda_handler(event, context):
         row_count=len(rows)
         if (len(rows) > MAX_BATCH_ROWS):
             status_code = 400;
-            json_compatible_string_to_return=json.dumps({"data" : ["Too many rows in batch; Set MAX_BATCH_ROWS="+str(MAX_BATCH_ROWS) ] })
+            json_compatible_string_to_return="Too many rows in batch; Set MAX_BATCH_ROWS="+str(MAX_BATCH_ROWS) 
         else:
         
             # Get Credentials from Secret Manager
@@ -100,75 +98,76 @@ def lambda_handler(event, context):
             ssm_response_time_ms=int(((ssm_end_ts-ssm_begin_ts)*1000)/row_count)
             
             # initialize request  object
+            headers={'Content-type': 'application/json;charset=UTF-8', 'Accept': 'application/json'}
+            url='https://api.factset.com/content/factset-concordance/v1/company-match'
+
             session=requests.Session()
-            session.headers.update={'Content-type': 'application/json', 'Accept': 'application/json'}
             session.auth=(secret['APIUser'],secret['APIKey'])
             timeout=(FACTSET_API_READ_TIMEOUT)
+            
+            # initialize the parameter object send to the API. It's a dictionary with an array named input 
+            # holding dictionaries with the company match information
+            data={}
+            data['input']=[]
     
-            url='https://api.factset.com/content/symbology/v2/factset'
-     
             # For each input row in the JSON object...
-        
+
             for row in rows:
                 # Read the input row number (the output row number will be the same).
                 row_number = row[0]
      
-                # Read the first input parameter's value. For example, this can be a
-                # numeric value or a string, or it can be a compound value such as
-                # a JSON structure.
-                
-                # Read all not null values and add them to the 
-                output_row = {}
+                # Read all not null values and add them to the filter
 
-                params={}
-                column_count=min(len(col_names)+1,len(row))
-
-                #output_row['ip']=requests.get('https://api.ipify.org').text
+                request = {}
                 
-                for i in range(1,column_count):
+                for i in range(1,len(row)):
                     if not (row[i] == None):
-                        value=row[i] #.encode('ascii','ignore').decode()
-                        output_row[col_names[i-1]]=value
-                        params[col_names[i-1]]=value
+                        request[col_names[i-1]]=row[i]
                 
-                try:
+                # append the request to the existing input array            
+                data['input'].append(request)
+                
+                # also copy the company match information into an output object
+                array_of_rows_to_return.append([row_number,[request])
+                
+            try: 
 
-                    api_begin_ts=time.time()
-                    response=session.get(url,params=params,timeout=timeout)
-                    api_end_ts=time.time()
-                    
-                    
-                    output_row['api_response_time_ms']=int((api_end_ts-api_begin_ts)*1000)
-                    
-                    # Compose the output based on the input. This simple example
-                    # merely echoes the input by collecting the values into an array that
-                    # will be treated as a single VARIANT value.
-                    response.raise_for_status()
-                    output_row['status'] = response.status_code
-                    try:
-                        output_row['response'] = response.json()
-                    except Exception as err:
-                        pass
-
-                except Timeout as err:
-                    output_row['status'] = 408
-                    output_row['response'] = str(err)
-                    
-                except Exception as err:
-                    output_row['status'] = 400
-                    output_row['response'] = str(err)
-
-                end_ts=time.time()
-                output_row['billing_response_time_ms'] = output_row['api_response_time_ms']+ssm_response_time_ms
-                output_value = [output_row]
+                api_begin_ts=time.time()
+                response=session.post(url,data=json.dumps(data),headers=headers,timeout=timeout)
+                api_end_ts=time.time()
+                
+                response.raise_for_status()
     
-                # Put the returned row number and the returned value into an array.
-                row_to_return = [row_number, output_value]
-     
-                # ... and add that array to the main array.
-                array_of_rows_to_return.append(row_to_return)
- 
-            json_compatible_string_to_return = json.dumps({"data" : array_of_rows_to_return})
+                end_ts=time.time()
+                api_response_time_ms=int((api_end_ts-api_begin_ts)*1000)
+                billing_response_time_ms = api_response_time_ms+ssm_response_time_ms
+    
+                array_of_rows_to_return[0][1][0]['debug']={}
+                array_of_rows_to_return[0][1][0]['debug']['api_response_time_ms']=api_response_time_ms
+                array_of_rows_to_return[0][1][0]['debug']['billing_response_time_ms']=billing_response_time_ms
+                array_of_rows_to_return[0][1][0]['debug']['api_response']=(response.json())['data']
+                array_of_rows_to_return[0][1][0]['debug']['api_status']=200
+                
+                # match all responses by rowIndex to the output objects and add each response dictionary 
+                # to a corresponding object in the output object. Note that there are multiple objects
+                # returned by the API for each company match request. They are sorted by confidence score
+                for row in (response.json())['data']:
+                    # Read the input row number (the output row number will be the same).
+                    row_number = int(row['rowIndex'])
+                    if 'response' in array_of_rows_to_return[row_number][1][0]:
+                        (array_of_rows_to_return[row_number][1][0]['response']).append(row)
+                    else:
+                        array_of_rows_to_return[row_number][1][0]['response']=[row]
+    
+                json_compatible_string_to_return = json.dumps({"data" : array_of_rows_to_return})
+                
+            except Timeout as err:
+                status_code=408
+                json_compatible_string_to_return="HTTP Timeout: "+ url + " exceeded "+str(timeout)+" seconds"
+                
+            except Exception as err:
+                status_code=response.status_code
+                json_compatible_string_to_return="Error calling "+ url + ": " + response.text
             
     except Exception as err:
         # 400 implies some type of error.
