@@ -91,7 +91,7 @@ def lambda_handler(event, context):
         
         if (len(rows) > MAX_BATCH_ROWS):
             status_code = 400;
-            json_compatible_string_to_return=j"Too many rows in batch; Set MAX_BATCH_ROWS="+str(MAX_BATCH_ROWS)
+            json_compatible_string_to_return="Too many rows in batch; Set MAX_BATCH_ROWS="+str(MAX_BATCH_ROWS)
         else:
         
             # Get Credentials from Secret Manager

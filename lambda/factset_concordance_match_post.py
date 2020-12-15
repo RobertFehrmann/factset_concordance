@@ -62,8 +62,6 @@ def lambda_handler(event, context):
  
     MAX_BATCH_ROWS=25
     FACTSET_API_READ_TIMEOUT=25
-
-    begin_ts=time.time()
     
     # 200 is the HTTP status code for "ok".
     status_code = 200
@@ -99,7 +97,7 @@ def lambda_handler(event, context):
             
             # initialize request  object
             headers={'Content-type': 'application/json;charset=UTF-8', 'Accept': 'application/json'}
-            url='https://api.factset.com/content/factset-concordance/v1/company-match'
+            url='https://api.factset.com/content/factset-concordance/v1/entity-match'
 
             session=requests.Session()
             session.auth=(secret['APIUser'],secret['APIKey'])
@@ -128,7 +126,7 @@ def lambda_handler(event, context):
                 data['input'].append(request)
                 
                 # also copy the company match information into an output object
-                array_of_rows_to_return.append([row_number,[request])
+                array_of_rows_to_return.append([row_number,[request]])
                 
             try: 
 
@@ -138,7 +136,6 @@ def lambda_handler(event, context):
                 
                 response.raise_for_status()
     
-                end_ts=time.time()
                 api_response_time_ms=int((api_end_ts-api_begin_ts)*1000)
                 billing_response_time_ms = api_response_time_ms+ssm_response_time_ms
     

@@ -91,37 +91,38 @@ def lambda_handler(event, context):
         rows = payload["data"]
         row_count=len(rows)
         if (len(rows) > MAX_BATCH_ROWS):
-            status_code = 400;
+            status_code = 400
             json_compatible_string_to_return="Too many rows in batch; Set MAX_BATCH_ROWS="+str(MAX_BATCH_ROWS)
         else:
         
             # Get Credentials from Secret Manager
             ssm_begin_ts=time.time()
-            secret = json.loads(get_secret());
+            secret = json.loads(get_secret())
             ssm_end_ts=time.time()
             
             ssm_response_time_ms=int(((ssm_end_ts-ssm_begin_ts)*1000)/row_count)
             
             # create a files object, unique identification for the uploaded file 
-            files={}
-            files['taskName']='Snowflake_'+uuid.uuid4().hex
+            payload={}
+            payload['taskName']='Snowflake_'+uuid.uuid4().hex
+
             file=io.StringIO(initial_value='',newline='\n')
 
             # create mapping between filter columns and column names            
             file.write('row_number')
             for i in range(0,len(form_names)):
                 file.write(',')
-                files[form_names[i]]=col_names[i]
+                payload[form_names[i]]=col_names[i]
                 file.write(col_names[i])
             
             # initialize request  object
-            headers={'Content-Type': 'multipart/form-data;charset=UTF-8', 'Accept': 'application/json'}
-            url='https://api.factset.com/content/factset-concordance/v1/company-task'
-
+            #headers={'Content-Type': 'multipart/form-data;charset=UTF-8', 'Accept': 'application/json'}
+            url='https://api.factset.com/content/factset-concordance/v1/entity-task'
             session=requests.Session()
             session.auth=(secret['APIUser'],secret['APIKey'])
             timeout=(FACTSET_API_READ_TIMEOUT)
-     
+            #session.headers.update={'Content-Type': 'multipart/form-data;charset=UTF-8', 'Accept': 'application/json'}
+            
             # For each input row in the JSON object...
             for row in rows:
                 
@@ -145,11 +146,12 @@ def lambda_handler(event, context):
                 array_of_rows_to_return.append([row_number, [output_row]])
 
             # add the encoded content of the file object to the files parameter 
+            files={}
             files['inputFile']=(file.getvalue()).encode('utf-8')
             try:
 
                 api_begin_ts=time.time()
-                response=session.post(url, files=files, timeout=timeout)
+                response=session.post(url, files=files, data=payload, timeout=timeout)
                 api_end_ts=time.time()
 
                 end_ts=time.time()
@@ -167,8 +169,6 @@ def lambda_handler(event, context):
                 array_of_rows_to_return[0][1][0]['debug']['api_status']=200
 
                 # add task ID and task status to every row                 
-                for row in array_of_rows_to_return:
-                    # Read the input row number (the output row number will be the same).
                 for row_number in range(0,len(array_of_rows_to_return)):
                     # Read the input row number (the output row number will be the same).
                     try:
